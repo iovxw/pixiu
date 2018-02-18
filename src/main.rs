@@ -10,10 +10,11 @@ extern crate serde_derive;
 #[cfg(test)]
 mod tests;
 
-use rocket_contrib::{Json, Value};
-use rocket::State;
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+use rocket_contrib::{Json, Value};
+use rocket::State;
 
 // The type to represent the ID of a message.
 type ID = usize;
@@ -22,15 +23,20 @@ type ID = usize;
 type MessageMap = Mutex<HashMap<ID, String>>;
 
 #[derive(Debug, Serialize, Deserialize)]
-struct NewChest {
+struct Chest {
     x: i64,
     y: i64,
     z: i64,
     level: u32,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct NewChestReq {
+    chest: Chest,
+}
+
 #[post("/", format = "application/json", data = "<message>")]
-fn newchest(message: Json<NewChest>, map: State<MessageMap>) -> Json<Value> {
+fn newchest(message: Json<NewChestReq>, map: State<MessageMap>) -> Json<Value> {
     println!("{:?}", message);
     Json(json!({ "status": "ok" }))
 }
