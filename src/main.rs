@@ -27,7 +27,7 @@ struct Chest {
     x: i64,
     y: i64,
     z: i64,
-    level: u32,
+    lv: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
