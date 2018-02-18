@@ -1,33 +1,79 @@
 #![feature(plugin, decl_macro)]
 #![plugin(rocket_codegen)]
+#![feature(non_modrs_mods)]
 
+#[macro_use]
+extern crate diesel;
+#[macro_use]
+extern crate lazy_static;
+extern crate r2d2;
+extern crate r2d2_diesel;
 extern crate rocket;
 #[macro_use]
 extern crate rocket_contrib;
 #[macro_use]
 extern crate serde_derive;
 
+mod db;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
+use rocket::{http::Status, response::status};
 use rocket_contrib::{Json, Value};
-use rocket::State;
+use diesel::sqlite::SqliteConnection;
+use r2d2_diesel::ConnectionManager;
 
-// The type to represent the ID of a message.
-type ID = usize;
+type Pool = r2d2::Pool<ConnectionManager<SqliteConnection>>;
 
-// We're going to store all of the messages here. No need for a DB.
-type MessageMap = Mutex<HashMap<ID, String>>;
+// The URL to the database, set via the `DATABASE_URL` environment variable.
+lazy_static! {
+    static ref DATABASE_URL: String = std::env::var("DATABASE_URL")
+        .unwrap_or(concat!(env!("CARGO_PKG_NAME"), ".db").to_string());
+}
+
+/// Initializes a database pool.
+fn init_pool() -> Pool {
+    let manager = ConnectionManager::<SqliteConnection>::new(DATABASE_URL.as_str());
+    r2d2::Pool::new(manager).expect("db pool")
+}
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Chest {
+pub struct Chest {
     x: i64,
     y: i64,
     z: i64,
-    lv: u32,
+    lv: u8,
+}
+
+impl Chest {
+    fn position(&self) -> Position {
+        Position {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Position {
+    x: i64,
+    y: i64,
+    z: i64,
+}
+
+impl Position {
+    fn from_i64(data: i64) -> Position {
+        Position {
+            x: data >> 38,
+            y: (data >> 26) & 0xFFF,
+            z: data << 38 >> 38,
+        }
+    }
+
+    fn as_i64(&self) -> i64 {
+        ((self.x & 0x3FFFFFF) << 38) | ((self.y & 0xFFF) << 26) | (self.z & 0x3FFFFFF)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,9 +89,21 @@ struct NewChestReq {
 }
 
 #[post("/", format = "application/json", data = "<message>")]
-fn newchest(message: Json<NewChestReq>, map: State<MessageMap>) -> Json<Value> {
-    println!("{:?}", message);
-    Json(json!({ "status": "ok" }))
+fn newchest(
+    message: Json<NewChestReq>,
+    conn: db::DbConn,
+) -> Result<Json<Value>, status::Custom<Json<Value>>> {
+    println!("{:?}", message); // TODO: use logger
+    if db::insert_chest(&conn, &message.chest, &message.player.uuid).is_err() {
+        return Err(status::Custom(
+            Status::InternalServerError,
+            Json(json!({
+            "status": "error",
+            "reason": "Database error."
+        })),
+        ));
+    };
+    Ok(Json(json!({ "status": "ok" })))
 }
 
 #[error(404)]
@@ -68,7 +126,7 @@ fn rocket() -> rocket::Rocket {
     rocket::ignite()
         .mount("/newchest", routes![newchest])
         .catch(errors![not_found, bad_request])
-        .manage(Mutex::new(HashMap::<ID, String>::new()))
+        .manage(init_pool())
 }
 
 fn main() {
