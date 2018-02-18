@@ -67,7 +67,7 @@ fn bad_request() -> Json<Value> {
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
         .mount("/newchest", routes![newchest])
-        .catch(errors![not_found])
+        .catch(errors![not_found, bad_request])
         .manage(Mutex::new(HashMap::<ID, String>::new()))
 }
 
