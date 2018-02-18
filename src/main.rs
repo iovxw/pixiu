@@ -55,7 +55,7 @@ impl Chest {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 struct Position {
     x: i64,
     y: i64,
