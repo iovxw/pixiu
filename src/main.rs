@@ -31,7 +31,14 @@ struct Chest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct Player {
+    name: String,
+    uuid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct NewChestReq {
+    player: Player,
     chest: Chest,
 }
 
@@ -46,6 +53,14 @@ fn not_found() -> Json<Value> {
     Json(json!({
         "status": "error",
         "reason": "Resource was not found."
+    }))
+}
+
+#[error(400)]
+fn bad_request() -> Json<Value> {
+    Json(json!({
+        "status": "error",
+        "reason": "Bad request."
     }))
 }
 
