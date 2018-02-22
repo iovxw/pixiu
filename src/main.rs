@@ -137,7 +137,7 @@ fn chests(conn: db::DbConn) -> Result<Json<Value>, status::Custom<Json<Value>>> 
             })),
         ));
     };
-    Ok(Json(json!({ "status": "ok", "data": data })))
+    Ok(Json(json!({ "status": "ok", "chests": data })))
 }
 
 #[error(404)]
