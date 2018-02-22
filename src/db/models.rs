@@ -5,7 +5,7 @@ pub struct Chest {
     pub id: i32,
     pub position: i64,
     pub lv: i16,
-    pub found_by: String,
+    pub found_by: Option<String>,
 }
 
 #[derive(Insertable)]

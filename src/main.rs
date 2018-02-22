@@ -1,6 +1,7 @@
 #![feature(plugin, decl_macro)]
 #![plugin(rocket_codegen)]
 #![feature(non_modrs_mods)]
+#![feature(crate_in_paths)]
 
 #[macro_use]
 extern crate diesel;
@@ -20,7 +21,7 @@ mod tests;
 
 use rocket::{http::Status, response::status};
 use rocket_contrib::{Json, Value};
-use diesel::sqlite::SqliteConnection;
+use diesel::{prelude::*, sqlite::SqliteConnection};
 use r2d2_diesel::ConnectionManager;
 
 type Pool = r2d2::Pool<ConnectionManager<SqliteConnection>>;
@@ -43,6 +44,18 @@ pub struct Chest {
     y: i64,
     z: i64,
     lv: u8,
+}
+
+impl From<(i64, i16)> for Chest {
+    fn from(src: (i64, i16)) -> Chest {
+        let Position { x, y, z } = Position::from_i64(src.0);
+        Chest {
+            x: x,
+            y: y,
+            z: z,
+            lv: src.1 as u8,
+        }
+    }
 }
 
 impl Chest {
@@ -98,12 +111,33 @@ fn newchest(
         return Err(status::Custom(
             Status::InternalServerError,
             Json(json!({
-            "status": "error",
-            "reason": "Database error."
-        })),
+                "status": "error",
+                "reason": "Database error."
+            })),
         ));
     };
     Ok(Json(json!({ "status": "ok" })))
+}
+
+#[get("/")]
+fn chests(conn: db::DbConn) -> Result<Json<Value>, status::Custom<Json<Value>>> {
+    use db::schema::chests::dsl::*;
+    let data: Vec<Chest> = if let Ok(data) = chests
+        .select((position, lv))
+        .distinct()
+        .load::<(i64, i16)>(&*conn)
+    {
+        data.into_iter().map(Into::into).collect()
+    } else {
+        return Err(status::Custom(
+            Status::InternalServerError,
+            Json(json!({
+                "status": "error",
+                "reason": "Database error."
+            })),
+        ));
+    };
+    Ok(Json(json!({ "status": "ok", "data": data })))
 }
 
 #[error(404)]
@@ -125,6 +159,7 @@ fn bad_request() -> Json<Value> {
 fn rocket() -> rocket::Rocket {
     rocket::ignite()
         .mount("/newchest", routes![newchest])
+        .mount("/chests", routes![chests])
         .catch(errors![not_found, bad_request])
         .manage(init_pool())
 }
