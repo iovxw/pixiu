@@ -109,6 +109,7 @@ fn newchest(
     raw_token: String,
     message: Json<NewChestReq>,
     conn: db::DbConn,
+    token_cache: State<TokenCache>,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
     let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
