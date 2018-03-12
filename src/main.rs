@@ -115,7 +115,10 @@ fn newchest(
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
 
     println!("{:?}", message); // TODO: use logger
-    db::insert_chest(&conn, &message.chest, id).map_err(|_| errors::database_error())?;
+    db::insert_chest(&conn, &message.chest, id).map_err(|e| {
+        println!("database error: {}", e);
+        errors::database_error()
+    })?;
     Ok(Json(json!({ "status": "ok" })))
 }
 
@@ -133,7 +136,10 @@ fn chests(
         .select((dsl::position, dsl::lv))
         .distinct()
         .load::<(i64, i16)>(&*conn)
-        .map_err(|_| errors::database_error())?;
+        .map_err(|e| {
+            println!("database error: {}", e);
+            errors::database_error()
+        })?;
     let data: Vec<Chest> = data.into_iter().map(Into::into).collect();
     Ok(Json(json!({ "status": "ok", "chests": data })))
 }
@@ -157,14 +163,20 @@ fn verify_token(
     token: u64,
     raw_token: &str,
 ) -> Result<(), status::Custom<Json<Value>>> {
-    if db::verify_token(&conn, id, token).map_err(|_| errors::database_error())? {
+    if db::verify_token(&conn, id, token).map_err(|e| {
+        println!("database error: {}", e);
+        errors::database_error()
+    })? {
         Ok(())
     } else {
         if let Some(username) = token_cache.lock().unwrap().verify(id, token) {
             if minecraft::has_joined(&username, raw_token)
                 .map_err(|_| errors::mojang_service_error())?
             {
-                db::update_token(conn, id, token).map_err(|_| errors::database_error())?;
+                db::update_token(conn, id, token).map_err(|e| {
+                    println!("database error: {}", e);
+                    errors::database_error()
+                })?;
                 return Ok(());
             }
         }
@@ -184,10 +196,16 @@ fn newtoken(
     conn: db::DbConn,
     token_cache: State<TokenCache>,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
-    let user_id = db::get_user_id(&conn, &uuid).map_err(|_| errors::database_error())?;
+    let user_id = db::get_user_id(&conn, &uuid).map_err(|e| {
+        println!("database error: {}", e);
+        errors::database_error()
+    })?;
     let user_id = if user_id.is_none() {
         // TODO: verify the uuid
-        db::insert_user(&conn, &uuid).map_err(|_| errors::database_error())?
+        db::insert_user(&conn, &uuid).map_err(|e| {
+            println!("database error: {}", e);
+            errors::database_error()
+        })?
     } else {
         user_id.unwrap()
     };
