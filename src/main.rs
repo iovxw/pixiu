@@ -5,16 +5,15 @@
 
 extern crate base62;
 #[macro_use]
-extern crate diesel;
-#[macro_use]
 extern crate lazy_static;
 extern crate r2d2;
-extern crate r2d2_diesel;
+extern crate r2d2_sqlite;
 extern crate rand;
 extern crate reqwest;
 extern crate rocket;
 #[macro_use]
 extern crate rocket_contrib;
+extern crate rusqlite;
 #[macro_use]
 extern crate serde_derive;
 
@@ -30,10 +29,9 @@ use std::time::Duration;
 
 use rocket::{State, response::status};
 use rocket_contrib::{Json, Value};
-use diesel::{prelude::*, sqlite::SqliteConnection};
-use r2d2_diesel::ConnectionManager;
+use r2d2_sqlite::SqliteConnectionManager;
 
-type Pool = r2d2::Pool<ConnectionManager<SqliteConnection>>;
+type Pool = r2d2::Pool<SqliteConnectionManager>;
 type TokenCache = Mutex<token::UnverifiedTokenCache>;
 
 // The URL to the database, set via the `DATABASE_URL` environment variable.
@@ -44,7 +42,7 @@ lazy_static! {
 
 /// Initializes a database pool.
 fn init_pool() -> Pool {
-    let manager = ConnectionManager::<SqliteConnection>::new(DATABASE_URL.as_str());
+    let manager = SqliteConnectionManager::file(DATABASE_URL.as_str());
     r2d2::Pool::new(manager).expect("db pool")
 }
 
@@ -54,18 +52,6 @@ pub struct Chest {
     y: i64,
     z: i64,
     lv: u8,
-}
-
-impl From<(i64, i16)> for Chest {
-    fn from(src: (i64, i16)) -> Chest {
-        let Position { x, y, z } = Position::from_i64(src.0);
-        Chest {
-            x: x,
-            y: y,
-            z: z,
-            lv: src.1 as u8,
-        }
-    }
 }
 
 impl Chest {
@@ -128,19 +114,13 @@ fn chests(
     conn: db::DbConn,
     token_cache: State<TokenCache>,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
-    use db::schema::chests::dsl;
     let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
 
-    let data = dsl::chests
-        .select((dsl::position, dsl::lv))
-        .distinct()
-        .load::<(i64, i16)>(&*conn)
-        .map_err(|e| {
-            println!("database error: {}", e);
-            errors::database_error()
-        })?;
-    let data: Vec<Chest> = data.into_iter().map(Into::into).collect();
+    let data = db::all_chests(&conn).map_err(|e| {
+        println!("database error: {}", e);
+        errors::database_error()
+    })?;
     Ok(Json(json!({ "status": "ok", "chests": data })))
 }
 
@@ -157,7 +137,7 @@ fn parse_token(raw_token: &str) -> Option<(u64, u64)> {
 }
 
 fn verify_token(
-    conn: &SqliteConnection,
+    conn: &rusqlite::Connection,
     token_cache: &TokenCache,
     id: u64,
     token: u64,
