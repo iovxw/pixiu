@@ -1,17 +1,15 @@
-use super::schema::chests;
-
-#[derive(Queryable)]
-pub struct Chest {
-    pub id: i32,
-    pub position: i64,
-    pub lv: i16,
-    pub found_by: Option<String>,
-}
+use super::schema::*;
 
 #[derive(Insertable)]
 #[table_name = "chests"]
-pub struct NewChest<'a> {
+pub struct NewChest {
     pub position: i64,
     pub lv: i16,
-    pub found_by: &'a str,
+    pub found_by: i64,
+}
+
+#[derive(Insertable)]
+#[table_name = "users"]
+pub struct NewUser<'a> {
+    pub uuid: &'a str,
 }

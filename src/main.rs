@@ -3,12 +3,15 @@
 #![feature(non_modrs_mods)]
 #![feature(crate_in_paths)]
 
+extern crate base62;
 #[macro_use]
 extern crate diesel;
 #[macro_use]
 extern crate lazy_static;
 extern crate r2d2;
 extern crate r2d2_diesel;
+extern crate rand;
+extern crate reqwest;
 extern crate rocket;
 #[macro_use]
 extern crate rocket_contrib;
@@ -16,15 +19,22 @@ extern crate rocket_contrib;
 extern crate serde_derive;
 
 mod db;
+mod token;
+mod minecraft;
+mod errors;
 #[cfg(test)]
 mod tests;
 
-use rocket::{http::Status, response::status};
+use std::sync::Mutex;
+use std::time::Duration;
+
+use rocket::{State, response::status};
 use rocket_contrib::{Json, Value};
 use diesel::{prelude::*, sqlite::SqliteConnection};
 use r2d2_diesel::ConnectionManager;
 
 type Pool = r2d2::Pool<ConnectionManager<SqliteConnection>>;
+type TokenCache = Mutex<token::UnverifiedTokenCache>;
 
 // The URL to the database, set via the `DATABASE_URL` environment variable.
 lazy_static! {
@@ -90,54 +100,102 @@ impl Position {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Player {
-    name: String,
-    uuid: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct NewChestReq {
-    player: Player,
     chest: Chest,
 }
 
-#[post("/", format = "application/json", data = "<message>")]
+#[post("/newchest/<raw_token>", format = "application/json", data = "<message>")]
 fn newchest(
+    raw_token: String,
     message: Json<NewChestReq>,
     conn: db::DbConn,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
+    let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
+    if !db::verify_token(&conn, id, token).map_err(|_| errors::database_error())? {
+        return Err(errors::forbidden());
+    }
     println!("{:?}", message); // TODO: use logger
-    if db::insert_chest(&conn, &message.chest, &message.player.uuid).is_err() {
-        return Err(status::Custom(
-            Status::InternalServerError,
-            Json(json!({
-                "status": "error",
-                "reason": "Database error."
-            })),
-        ));
-    };
+    db::insert_chest(&conn, &message.chest, id).map_err(|_| errors::database_error())?;
     Ok(Json(json!({ "status": "ok" })))
 }
 
-#[get("/")]
-fn chests(conn: db::DbConn) -> Result<Json<Value>, status::Custom<Json<Value>>> {
-    use db::schema::chests::dsl::*;
-    let data: Vec<Chest> = if let Ok(data) = chests
-        .select((position, lv))
+#[get("/chests/<raw_token>")]
+fn chests(
+    raw_token: String,
+    conn: db::DbConn,
+    token_cache: State<TokenCache>,
+) -> Result<Json<Value>, status::Custom<Json<Value>>> {
+    use db::schema::chests::dsl;
+    let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
+    verify_token(&conn, &token_cache, id, token, &raw_token)?;
+    let data = dsl::chests
+        .select((dsl::position, dsl::lv))
         .distinct()
         .load::<(i64, i16)>(&*conn)
-    {
-        data.into_iter().map(Into::into).collect()
-    } else {
-        return Err(status::Custom(
-            Status::InternalServerError,
-            Json(json!({
-                "status": "error",
-                "reason": "Database error."
-            })),
-        ));
-    };
+        .map_err(|_| errors::database_error())?;
+    let data: Vec<Chest> = data.into_iter().map(Into::into).collect();
     Ok(Json(json!({ "status": "ok", "chests": data })))
+}
+
+fn parse_token(raw_token: &str) -> Option<(u64, u64)> {
+    let mut iter = raw_token.split(':');
+    let id = iter.next()?;
+    let token = iter.next()?;
+    if iter.next().is_some() {
+        return None;
+    }
+    let id = base62::decode(&id).ok()?;
+    let token = base62::decode(&token).ok()?;
+    Some((id, token))
+}
+
+fn verify_token(
+    conn: &SqliteConnection,
+    token_cache: &TokenCache,
+    id: u64,
+    token: u64,
+    raw_token: &str,
+) -> Result<(), status::Custom<Json<Value>>> {
+    if db::verify_token(&conn, id, token).map_err(|_| errors::database_error())? {
+        Ok(())
+    } else {
+        if let Some(username) = token_cache.lock().unwrap().verify(id, token) {
+            if minecraft::has_joined(&username, raw_token)
+                .map_err(|_| errors::mojang_service_error())?
+            {
+                db::update_token(conn, id, token).map_err(|_| errors::database_error())?;
+                return Ok(());
+            }
+        }
+        Err(errors::forbidden())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NewTokenReq {
+    player: String,
+}
+
+#[get("/newtoken/<uuid>/<username>")]
+fn newtoken(
+    uuid: String,
+    username: String,
+    conn: db::DbConn,
+    token_cache: State<TokenCache>,
+) -> Result<Json<Value>, status::Custom<Json<Value>>> {
+    println!("{:?}", uuid); // TODO: use logger
+    let user_id = db::get_user_id(&conn, &uuid).map_err(|_| errors::database_error())?;
+    println!("id {:?}", user_id);
+    let user_id = if user_id.is_none() {
+        // TODO: verify the uuid
+        db::insert_user(&conn, &uuid).map_err(|_| errors::database_error())?
+    } else {
+        user_id.unwrap()
+    };
+    let token = token_cache.lock().unwrap().generate(user_id, username);
+    println!("new token: {}", token);
+    let token = base62::encode(user_id) + ":" + &base62::encode(token);
+    Ok(Json(json!({ "status": "ok", "token": token })))
 }
 
 #[error(404)]
@@ -157,11 +215,12 @@ fn bad_request() -> Json<Value> {
 }
 
 fn rocket() -> rocket::Rocket {
+    let token_cache = Mutex::new(token::UnverifiedTokenCache::new(Duration::from_secs(10)));
     rocket::ignite()
-        .mount("/newchest", routes![newchest])
-        .mount("/chests", routes![chests])
+        .mount("/", routes![newchest, chests, newtoken])
         .catch(errors![not_found, bad_request])
         .manage(init_pool())
+        .manage(token_cache)
 }
 
 fn main() {
