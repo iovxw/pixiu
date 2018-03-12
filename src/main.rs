@@ -111,9 +111,8 @@ fn newchest(
     conn: db::DbConn,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
     let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
-    if !db::verify_token(&conn, id, token).map_err(|_| errors::database_error())? {
-        return Err(errors::forbidden());
-    }
+    verify_token(&conn, &token_cache, id, token, &raw_token)?;
+
     println!("{:?}", message); // TODO: use logger
     db::insert_chest(&conn, &message.chest, id).map_err(|_| errors::database_error())?;
     Ok(Json(json!({ "status": "ok" })))
@@ -128,6 +127,7 @@ fn chests(
     use db::schema::chests::dsl;
     let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
+
     let data = dsl::chests
         .select((dsl::position, dsl::lv))
         .distinct()
@@ -183,9 +183,7 @@ fn newtoken(
     conn: db::DbConn,
     token_cache: State<TokenCache>,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
-    println!("{:?}", uuid); // TODO: use logger
     let user_id = db::get_user_id(&conn, &uuid).map_err(|_| errors::database_error())?;
-    println!("id {:?}", user_id);
     let user_id = if user_id.is_none() {
         // TODO: verify the uuid
         db::insert_user(&conn, &uuid).map_err(|_| errors::database_error())?
@@ -193,7 +191,6 @@ fn newtoken(
         user_id.unwrap()
     };
     let token = token_cache.lock().unwrap().generate(user_id, username);
-    println!("new token: {}", token);
     let token = base62::encode(user_id) + ":" + &base62::encode(token);
     Ok(Json(json!({ "status": "ok", "token": token })))
 }
