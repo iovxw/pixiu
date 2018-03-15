@@ -46,82 +46,39 @@ fn init_pool() -> Pool {
     r2d2::Pool::new(manager).expect("db pool")
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Chest {
-    x: i64,
-    y: i64,
-    z: i64,
-    lv: u8,
-}
-
-impl Chest {
-    fn position(&self) -> Position {
-        Position {
-            x: self.x,
-            y: self.y,
-            z: self.z,
-        }
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct Position {
-    x: i64,
-    y: i64,
-    z: i64,
-}
-
-impl Position {
-    fn from_i64(data: i64) -> Position {
-        Position {
-            x: data >> 38,
-            y: (data >> 26) & 0xFFF,
-            z: data << 38 >> 38,
-        }
-    }
-
-    fn as_i64(&self) -> i64 {
-        ((self.x & 0x3FFFFFF) << 38) | ((self.y & 0xFFF) << 26) | (self.z & 0x3FFFFFF)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct NewChestReq {
-    chest: Chest,
-}
-
-#[post("/newchest/<raw_token>", format = "application/json", data = "<message>")]
-fn newchest(
+#[get("/put/<raw_token>/<key>/<value>")]
+fn put(
     raw_token: String,
-    message: Json<NewChestReq>,
+    key: String,
+    value: String,
     conn: db::DbConn,
     token_cache: State<TokenCache>,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
     let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
 
-    println!("{:?}", message); // TODO: use logger
-    db::insert_chest(&conn, &message.chest, id).map_err(|e| {
+    db::put(&conn, &key, &value, id).map_err(|e| {
         println!("database error: {}", e);
         errors::database_error()
     })?;
     Ok(Json(json!({ "status": "ok" })))
 }
 
-#[get("/chests/<raw_token>")]
-fn chests(
+#[get("/get/<raw_token>/<key>")]
+fn get(
     raw_token: String,
+    key: String,
     conn: db::DbConn,
     token_cache: State<TokenCache>,
 ) -> Result<Json<Value>, status::Custom<Json<Value>>> {
     let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
 
-    let data = db::all_chests(&conn).map_err(|e| {
+    let data = db::get(&conn, &key).map_err(|e| {
         println!("database error: {}", e);
         errors::database_error()
     })?;
-    Ok(Json(json!({ "status": "ok", "chests": data })))
+    Ok(Json(json!({ "status": "ok", "values": data })))
 }
 
 fn parse_token(raw_token: &str) -> Option<(u64, u64)> {
@@ -213,7 +170,7 @@ fn bad_request() -> Json<Value> {
 fn rocket() -> rocket::Rocket {
     let token_cache = Mutex::new(token::UnverifiedTokenCache::new(Duration::from_secs(10)));
     rocket::ignite()
-        .mount("/", routes![newchest, chests, newtoken])
+        .mount("/", routes![put, get, newtoken])
         .catch(errors![not_found, bad_request])
         .manage(init_pool())
         .manage(token_cache)

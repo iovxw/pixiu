@@ -9,7 +9,6 @@ use r2d2;
 use r2d2_sqlite::SqliteConnectionManager;
 
 use super::Pool;
-use super::Chest;
 
 // Connection request guard type: a wrapper around an r2d2 pooled connection.
 pub struct DbConn(pub r2d2::PooledConnection<SqliteConnectionManager>);
@@ -38,32 +37,28 @@ impl Deref for DbConn {
     }
 }
 
-pub fn insert_chest(
+pub fn put(
     conn: &rusqlite::Connection,
-    chest: &Chest,
-    found_by: u64,
+    key: &str,
+    value: &str,
+    put_by: u64,
 ) -> Result<(), rusqlite::Error> {
-    const SQL: &str = "INSERT INTO chests (position, lv, found_by) VALUES (?1, ?2, ?3)";
+    const SQL: &str = "INSERT INTO data (key, value, put_by) VALUES (?1, ?2, ?3)";
     let mut insert = conn.prepare_cached(SQL).expect(SQL);
-    insert.insert(&[&chest.position().as_i64(), &chest.lv, &u64_to_i64(found_by)])?;
+    insert.insert(&[&key, &value, &(put_by as i64)])?;
     Ok(())
 }
 
-pub fn all_chests(conn: &rusqlite::Connection) -> Result<Vec<super::Chest>, rusqlite::Error> {
-    use super::{Position, Chest};
-
-    const SQL: &str = "SELECT DISTINCT position, lv FROM chests";
+pub fn get(conn: &rusqlite::Connection, key: &str) -> Result<Vec<String>, rusqlite::Error> {
+    const SQL: &str = "SELECT DISTINCT value FROM data WHERE key = ?";
     let mut get_id = conn.prepare_cached(SQL).expect(SQL);
-    let mut rows = get_id.query(&[])?;
+    let mut rows = get_id.query(&[&key])?;
 
     let mut r = Vec::new();
 
     while let Some(result_row) = rows.next() {
         let row = result_row?;
-        let Position { x, y, z } = Position::from_i64(row.get(0));
-        let lv = row.get::<i32,i64>(1) as u8;
-        let chest = Chest {x,y,z,lv};
-        r.push(chest);
+        r.push(row.get(0));
     }
 
     Ok(r)
