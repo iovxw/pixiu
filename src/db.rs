@@ -1,5 +1,6 @@
 use std::ops::Deref;
 use std::mem::transmute;
+use std::collections::HashMap;
 
 use rusqlite;
 use rocket::http::Status;
@@ -59,6 +60,34 @@ pub fn get(conn: &rusqlite::Connection, key: &str) -> Result<Vec<String>, rusqli
     while let Some(result_row) = rows.next() {
         let row = result_row?;
         r.push(row.get(0));
+    }
+
+    Ok(r)
+}
+
+pub fn getall(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> Result<HashMap<String, Vec<String>>, rusqlite::Error> {
+    const SQL: &str = "SELECT DISTINCT key, value FROM data WHERE key LIKE ? ESCAPE '\\'";
+    let mut get_id = conn.prepare_cached(SQL).expect(SQL);
+    let mut key = key.replace('\\', r#"\\"#)
+        .replace('%', r#"\%"#)
+        .replace('_', r#"\_"#);
+    key.push('%');
+    let mut rows = get_id.query(&[&key])?;
+
+    let mut r: HashMap<String, Vec<String>> = HashMap::new();
+
+    while let Some(result_row) = rows.next() {
+        let row = result_row?;
+        let key = row.get(0);
+        let value = row.get(1);
+        if let Some(vector) = r.get_mut(&key) {
+            vector.push(value);
+        } else {
+            r.insert(key, vec![value]);
+        }
     }
 
     Ok(r)

@@ -2,6 +2,7 @@
 #![plugin(rocket_codegen)]
 #![feature(non_modrs_mods)]
 #![feature(crate_in_paths)]
+#![feature(nll)]
 
 extern crate base62;
 #[macro_use]
@@ -36,8 +37,8 @@ type TokenCache = Mutex<token::UnverifiedTokenCache>;
 
 // The URL to the database, set via the `DATABASE_URL` environment variable.
 lazy_static! {
-    static ref DATABASE_URL: String = std::env::var("DATABASE_URL")
-        .unwrap_or(concat!(env!("CARGO_PKG_NAME"), ".db").to_string());
+    static ref DATABASE_URL: String =
+        std::env::var("DATABASE_URL").unwrap_or(concat!(env!("CARGO_PKG_NAME"), ".db").to_string());
 }
 
 /// Initializes a database pool.
@@ -75,6 +76,23 @@ fn get(
     verify_token(&conn, &token_cache, id, token, &raw_token)?;
 
     let data = db::get(&conn, &key).map_err(|e| {
+        println!("database error: {}", e);
+        errors::database_error()
+    })?;
+    Ok(Json(json!({ "status": "ok", "values": data })))
+}
+
+#[get("/getall/<raw_token>/<key>")]
+fn getall(
+    raw_token: String,
+    key: String,
+    conn: db::DbConn,
+    token_cache: State<TokenCache>,
+) -> Result<Json<Value>, status::Custom<Json<Value>>> {
+    let (id, token) = parse_token(&raw_token).ok_or_else(errors::forbidden)?;
+    verify_token(&conn, &token_cache, id, token, &raw_token)?;
+
+    let data = db::getall(&conn, &key).map_err(|e| {
         println!("database error: {}", e);
         errors::database_error()
     })?;
@@ -170,7 +188,7 @@ fn bad_request() -> Json<Value> {
 fn rocket() -> rocket::Rocket {
     let token_cache = Mutex::new(token::UnverifiedTokenCache::new(Duration::from_secs(10)));
     rocket::ignite()
-        .mount("/", routes![put, get, newtoken])
+        .mount("/", routes![put, get, getall, newtoken])
         .catch(errors![not_found, bad_request])
         .manage(init_pool())
         .manage(token_cache)
